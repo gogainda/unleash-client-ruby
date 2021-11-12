@@ -117,9 +117,20 @@ Unleash.configure do |config|
 end
 
 UNLEASH = Unleash::Client.new
+
+# or alternatively:
+# Rails.configuration.unleash = Unleash::Client.new
 ```
 For `config.instance_id` use a string with a unique identification for the running instance. For example: it could be the hostname, if you only run one App per host. Or the docker container id, if you are running in docker. If it is not set the client will generate an unique UUID for each execution.
 
+To have it available in the `rails console` command as well, also add to the file above:
+```ruby
+Rails.application.console do
+  UNLEASH = Unleash::Client.new
+  # or
+  # Rails.configuration.unleash = Unleash::Client.new
+end
+```
 
 #### Add Initializer if using [Puma](https://github.com/puma/puma)
 
@@ -137,9 +148,35 @@ on_worker_boot do
   end
   Rails.configuration.unleash = Unleash::Client.new
 end
+
+before_fork do
+  Rails.configuration.unleash.shutdown!
+end
+
+on_worker_shutdown do
+  Rails.configuration.unleash.shutdown!
+end
 ```
 
 Instead of the configuration in `config/initializers/unleash.rb`.
+
+Note that we also added shutdown hooks in `before_fork` and `on_worker_shutdown`.
+
+#### Add Initializer hooks when using within [Sidekiq](https://github.com/mperham/sidekiq)
+
+Note that in this case we require that the code block for `Unleash.configure` is set before-hand. For example in `config/initializers/unleash.rb`.
+
+```ruby
+Sidekiq.configure_server do |config|
+  config.on(:startup) do
+    Rails.configuration.unleash = Unleash::Client.new
+  end
+
+  config.on(:shutdown) do
+    Rails.configuration.unleash.shutdown!
+  end
+end
+```
 
 #### Add Initializer if using [Phusion Passenger](https://github.com/phusion/passenger)
 
