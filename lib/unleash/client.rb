@@ -18,8 +18,9 @@ module Unleash
       Unleash.logger = Unleash.configuration.logger.clone
       Unleash.logger.level = Unleash.configuration.log_level
 
+      Unleash.toggle_fetcher = Unleash::ToggleFetcher.new
       if Unleash.configuration.disable_client
-        Unleash.logger.warn "Unleash::Client is disabled! Will only return default results!"
+        Unleash.logger.warn "Unleash::Client is disabled! Will only return default (or bootstrapped if available) results!"
         return
       end
 
@@ -31,16 +32,11 @@ module Unleash
     def is_enabled?(feature, context = nil, default_value_param = false, &fallback_blk)
       Unleash.logger.debug "Unleash::Client.is_enabled? feature: #{feature} with context #{context}"
 
-      if block_given?
-        default_value = default_value_param || !!fallback_blk.call(feature, context)
-      else
-        default_value = default_value_param
-      end
-
-      if Unleash.configuration.disable_client
-        Unleash.logger.warn "unleash_client is disabled! Always returning #{default_value} for feature #{feature}!"
-        return default_value
-      end
+      default_value = if block_given?
+                        default_value_param || !!fallback_blk.call(feature, context)
+                      else
+                        default_value_param
+                      end
 
       toggle_as_hash = Unleash&.toggles&.select{ |toggle| toggle['name'] == feature }&.first
 
@@ -94,7 +90,7 @@ module Unleash
     def shutdown
       unless Unleash.configuration.disable_client
         Unleash.toggle_fetcher.save!
-        Unleash.reporter.send unless Unleash.configuration.disable_metrics
+        Unleash.reporter.post unless Unleash.configuration.disable_metrics
         shutdown!
       end
     end
@@ -121,11 +117,11 @@ module Unleash
     end
 
     def start_toggle_fetcher
-      Unleash.toggle_fetcher = Unleash::ToggleFetcher.new
       self.fetcher_scheduled_executor = Unleash::ScheduledExecutor.new(
         'ToggleFetcher',
         Unleash.configuration.refresh_interval,
-        Unleash.configuration.retry_limit
+        Unleash.configuration.retry_limit,
+        first_fetch_is_eager
       )
       self.fetcher_scheduled_executor.run do
         Unleash.toggle_fetcher.fetch
@@ -141,7 +137,7 @@ module Unleash
         Unleash.configuration.retry_limit
       )
       self.metrics_scheduled_executor.run do
-        Unleash.reporter.send
+        Unleash.reporter.post
       end
     end
 
@@ -159,7 +155,11 @@ module Unleash
     end
 
     def disabled_variant
-      @disabled_variant ||= Unleash::FeatureToggle.new.disabled_variant
+      @disabled_variant ||= Unleash::FeatureToggle.disabled_variant
+    end
+
+    def first_fetch_is_eager
+      Unleash.configuration.use_bootstrap?
     end
   end
 end

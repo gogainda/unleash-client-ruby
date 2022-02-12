@@ -23,6 +23,18 @@ RSpec.describe Unleash::Client do
         }
       )
       .to_return(status: 200, body: "", headers: {})
+
+    simple_features = {
+      "version": 1,
+      "features": [
+        {
+          "name": "Feature.A",
+          "description": "Enabled toggle",
+          "enabled": true,
+          "strategies": [{ "name": "default" }]
+        }
+      ]
+    }
     WebMock.stub_request(:get, "http://test-url/client/features")
       .with(
         headers: {
@@ -35,7 +47,7 @@ RSpec.describe Unleash::Client do
           'X-Api-Key' => '123'
         }
       )
-      .to_return(status: 200, body: "", headers: {})
+      .to_return(status: 200, body: simple_features.to_json, headers: {})
 
     Unleash.configure do |config|
       config.url      = 'http://test-url/'
@@ -69,7 +81,19 @@ RSpec.describe Unleash::Client do
     ).to have_been_made.once
 
     # Test now sending of metrics
-    Unleash.reporter.send
+    # Not sending metrics, if no feature flags were evaluated:
+    Unleash.reporter.post
+    expect(
+      a_request(:post, "http://test-url/client/metrics")
+        .with(headers: { 'Content-Type': 'application/json' })
+        .with(headers: { 'X-API-KEY': '123', 'Content-Type': 'application/json' })
+        .with(headers: { 'UNLEASH-APPNAME': 'my-test-app' })
+        .with(headers: { 'UNLEASH-INSTANCEID': 'rspec/test' })
+    ).not_to have_been_made
+
+    # Sending metrics, if they have been evaluated:
+    unleash_client.is_enabled?("Feature.A")
+    Unleash.reporter.post
     expect(
       a_request(:post, "http://test-url/client/metrics")
       .with(headers: { 'Content-Type': 'application/json' })
@@ -144,12 +168,7 @@ RSpec.describe Unleash::Client do
       config.log_level = Logger::DEBUG
     end
 
-    unleash_client = Unleash::Client.new(
-      url: 'http://test-url/',
-      app_name: 'my-test-app',
-      instance_id: 'rspec/test',
-      custom_http_headers: { 'X-API-KEY' => '123' }
-    )
+    unleash_client = Unleash::Client.new
 
     expect(
       unleash_client.is_enabled?('toggleName', {}, true)
@@ -158,6 +177,41 @@ RSpec.describe Unleash::Client do
     expect(WebMock).not_to have_requested(:get, 'http://test-url/')
     expect(WebMock).to have_requested(:post, 'http://test-url/client/register')
     expect(WebMock).to have_requested(:get, 'http://test-url/client/features')
+  end
+
+  it "should load/use correct variants from a bootstrap source" do
+    bootstrap_values = '{
+      "version": 1,
+      "features": [
+        {
+          "name": "featureX",
+          "enabled": true,
+          "strategies": [{ "name": "default" }]
+        }
+      ]
+    }'
+
+    Unleash.configure do |config|
+      config.url      = 'http://test-url/'
+      config.app_name = 'my-test-app'
+      config.instance_id = 'rspec/test'
+      config.disable_client = true
+      config.disable_metrics = true
+      config.custom_http_headers = { 'X-API-KEY' => '123' }
+      config.log_level = Logger::DEBUG
+      config.bootstrap_config = Unleash::Bootstrap::Configuration.new({ 'data' => bootstrap_values })
+    end
+
+    expect(Unleash.configuration.bootstrap_config.data).to eq(bootstrap_values)
+
+    unleash_client = Unleash::Client.new
+    expect(
+      unleash_client.is_enabled?('featureX', {}, false)
+    ).to be true
+
+    expect(WebMock).not_to have_requested(:get, 'http://test-url/')
+    expect(WebMock).not_to have_requested(:post, 'http://test-url/client/register')
+    expect(WebMock).not_to have_requested(:get, 'http://test-url/client/features')
   end
 
   it "should not fail if we are provided no toggles from the unleash server" do
@@ -191,16 +245,12 @@ RSpec.describe Unleash::Client do
       config.url      = 'http://test-url/'
       config.app_name = 'my-test-app'
       config.instance_id = 'rspec/test'
+      config.disable_client = false
       config.disable_metrics = true
       config.custom_http_headers = { 'X-API-KEY' => '123' }
     end
 
-    unleash_client = Unleash::Client.new(
-      url: 'http://test-url/',
-      app_name: 'my-test-app',
-      instance_id: 'rspec/test',
-      custom_http_headers: { 'X-API-KEY' => '123' }
-    )
+    unleash_client = Unleash::Client.new
 
     expect(
       unleash_client.is_enabled?('any_feature', {}, true)
@@ -371,19 +421,20 @@ RSpec.describe Unleash::Client do
     let(:client) { Unleash::Client.new }
     let(:feature) { 'awesome-feature' }
     let(:fallback_variant) { Unleash::Variant.new(name: 'default', enabled: true) }
-    let(:variants) {
+    let(:variants) do
       [
         {
           name: "a",
           weight: 50,
+          stickiness: "default",
           payload: {
             type: "string",
             value: ""
           }
-        },
+        }
       ]
-    }
-    let(:body) {
+    end
+    let(:body) do
       {
         version: 1,
         features: [
@@ -397,34 +448,36 @@ RSpec.describe Unleash::Client do
           }
         ]
       }.to_json
-    }
+    end
 
     before do
       WebMock.stub_request(:post, "http://test-url/client/register")
-             .with(
-               headers: {
-                 'Accept' => '*/*',
-                 'Content-Type' => 'application/json',
-                 'Accept-Encoding' => 'gzip;q=1.0,deflate;q=0.6,identity;q=0.3',
-                 'User-Agent' => 'Ruby',
-                 'X-Api-Key' => '123'
-               }
-             )
-             .to_return(status: 200, body: '', headers: {})
+        .with(
+          headers: {
+            'Accept' => '*/*',
+            'Accept-Encoding' => 'gzip;q=1.0,deflate;q=0.6,identity;q=0.3',
+            'Content-Type' => 'application/json',
+            'Unleash-Appname' => 'my-test-app',
+            'Unleash-Instanceid' => 'rspec/test',
+            'User-Agent' => 'Ruby',
+            'X-Api-Key' => '123'
+          }
+        )
+        .to_return(status: 200, body: '', headers: {})
 
       WebMock.stub_request(:get, "http://test-url/client/features")
-             .with(
-               headers: {
-                 'Accept' => '*/*',
-                 'Accept-Encoding' => 'gzip;q=1.0,deflate;q=0.6,identity;q=0.3',
-                 'Content-Type' => 'application/json',
-                 'Unleash-Appname' => 'my-test-app',
-                 'Unleash-Instanceid' => 'rspec/test',
-                 'User-Agent' => 'Ruby',
-                 'X-Api-Key' => '123'
-               }
-             )
-             .to_return(status: 200, body: body, headers: {})
+        .with(
+          headers: {
+            'Accept' => '*/*',
+            'Accept-Encoding' => 'gzip;q=1.0,deflate;q=0.6,identity;q=0.3',
+            'Content-Type' => 'application/json',
+            'Unleash-Appname' => 'my-test-app',
+            'Unleash-Instanceid' => 'rspec/test',
+            'User-Agent' => 'Ruby',
+            'X-Api-Key' => '123'
+          }
+        )
+        .to_return(status: 200, body: body, headers: {})
 
       Unleash.toggles = []
       Unleash.configure do |config|

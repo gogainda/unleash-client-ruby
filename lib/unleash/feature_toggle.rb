@@ -32,26 +32,29 @@ module Unleash
       result
     end
 
-    def get_variant(context, fallback_variant = disabled_variant)
+    def get_variant(context, fallback_variant = Unleash::FeatureToggle.disabled_variant)
       raise ArgumentError, "Provided fallback_variant is not of type Unleash::Variant" if fallback_variant.class.name != 'Unleash::Variant'
 
       context = ensure_valid_context(context)
 
-      return disabled_variant unless self.enabled && am_enabled?(context, true)
-      return disabled_variant if sum_variant_defs_weights <= 0
+      return Unleash::FeatureToggle.disabled_variant unless self.enabled && am_enabled?(context, true)
+      return Unleash::FeatureToggle.disabled_variant if sum_variant_defs_weights <= 0
 
-      variant = variant_from_override_match(context)
-      variant = variant_from_weights(context) if variant.nil?
+      variant = variant_from_override_match(context) || variant_from_weights(context, resolve_stickiness)
 
       Unleash.toggle_metrics.increment_variant(self.name, variant.name) unless Unleash.configuration.disable_metrics
       variant
     end
 
-    def disabled_variant
+    def self.disabled_variant
       Unleash::Variant.new(name: 'disabled', enabled: false)
     end
 
     private
+
+    def resolve_stickiness
+      self.variant_definitions&.map(&:stickiness)&.compact&.first || "default"
+    end
 
     # only check if it is enabled, do not do metrics
     def am_enabled?(context, default_result)
@@ -85,7 +88,8 @@ module Unleash
       self.variant_definitions.map(&:weight).reduce(0, :+)
     end
 
-    def variant_salt(context)
+    def variant_salt(context, stickiness = "default")
+      return context.get_by_name(stickiness) unless stickiness == "default"
       return context.user_id unless context.user_id.to_s.empty?
       return context.session_id unless context.session_id.to_s.empty?
       return context.remote_address unless context.remote_address.to_s.empty?
@@ -100,8 +104,8 @@ module Unleash
       Unleash::Variant.new(name: variant.name, enabled: true, payload: variant.payload)
     end
 
-    def variant_from_weights(context)
-      variant_weight = Unleash::Strategy::Util.get_normalized_number(variant_salt(context), self.name, sum_variant_defs_weights)
+    def variant_from_weights(context, stickiness)
+      variant_weight = Unleash::Strategy::Util.get_normalized_number(variant_salt(context, stickiness), self.name, sum_variant_defs_weights)
       prev_weights = 0
 
       variant_definition = self.variant_definitions
@@ -110,7 +114,7 @@ module Unleash
           prev_weights += v.weight
           res
         end
-      return disabled_variant if variant_definition.nil?
+      return self.disabled_variant if variant_definition.nil?
 
       Unleash::Variant.new(name: variant_definition.name, enabled: true, payload: variant_definition.payload)
     end
@@ -150,6 +154,7 @@ module Unleash
             v.fetch('name', ''),
             v.fetch('weight', 0),
             v.fetch('payload', nil),
+            v.fetch('stickiness', nil),
             v.fetch('overrides', [])
           )
         end || []

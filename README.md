@@ -1,7 +1,7 @@
 # Unleash::Client
 
-[![Build Status](https://travis-ci.org/Unleash/unleash-client-ruby.svg?branch=master)](https://travis-ci.org/Unleash/unleash-client-ruby)
-[![Coverage Status](https://coveralls.io/repos/github/Unleash/unleash-client-ruby/badge.svg?branch=master)](https://coveralls.io/github/Unleash/unleash-client-ruby?branch=master)
+![Build Status](https://github.com/Unleash/unleash-client-ruby/actions/workflows/pull_request.yml/badge.svg?branch=main)
+[![Coverage Status](https://coveralls.io/repos/github/Unleash/unleash-client-ruby/badge.svg?branch=main)](https://coveralls.io/github/Unleash/unleash-client-ruby?branch=main)
 [![Gem Version](https://badge.fury.io/rb/unleash.svg)](https://badge.fury.io/rb/unleash)
 
 Unleash client so you can roll out your features with confidence.
@@ -10,18 +10,20 @@ Leverage the [Unleash Server](https://github.com/Unleash/unleash) for powerful f
 
 ## Supported Ruby Interpreters
 
+  * MRI 3.1
   * MRI 3.0
   * MRI 2.7
   * MRI 2.6
   * MRI 2.5
-  * jruby
+  * jruby 9.3
+  * jruby 9.2
 
 ## Installation
 
 Add this line to your application's Gemfile:
 
 ```ruby
-gem 'unleash', '~> 3.2.3'
+gem 'unleash', '~> 4.0.0'
 ```
 
 And then execute:
@@ -69,7 +71,7 @@ Argument | Description | Required? |  Type |  Default Value|
 `environment` | Environment the program is running on. Could be for example `prod` or `dev`. Not yet in use. | N | String | `default` |
 `project_name` | Name of the project to retrieve features from. If not set, all feature flags will be retrieved. | N | String | nil |
 `refresh_interval` | How often the unleash client should check with the server for configuration changes. | N | Integer |  15 |
-`metrics_interval` | How often the unleash client should send metrics to server. | N | Integer | 10 |
+`metrics_interval` | How often the unleash client should send metrics to server. | N | Integer | 60 |
 `disable_client` | Disables all communication with the Unleash server, effectively taking it *offline*. If set, `is_enabled?` will always answer with the `default_value` and configuration validation is skipped. Defeats the entire purpose of using unleash, but can be useful in when running tests. | N | Boolean | `false` |
 `disable_metrics` | Disables sending metrics to Unleash server. | N | Boolean | `false` |
 `custom_http_headers` | Custom headers to send to Unleash. As of Unleash v4.0.0, the `Authorization` header is required. For example: `{'Authorization': '<API token>'}` | N | Hash | {} |
@@ -77,10 +79,15 @@ Argument | Description | Required? |  Type |  Default Value|
 `retry_limit` | How many consecutive failures in connecting to the Unleash server are allowed before giving up. Use `Float::INFINITY` if you would like it to never give up. | N | Numeric | 5 |
 `backup_file` | Filename to store the last known state from the Unleash server. Best to not change this from the default. | N | String | `Dir.tmpdir + "/unleash-#{app_name}-repo.json` |
 `logger` | Specify a custom `Logger` class to handle logs for the Unleash client. | N | Class | `Logger.new(STDOUT)` |
-`log_level` | Change the log level for the `Logger` class. Constant from `Logger::Severity`. | N | Constant | `Logger::ERROR` |
+`log_level` | Change the log level for the `Logger` class. Constant from `Logger::Severity`. | N | Constant | `Logger::WARN` |
+`bootstrap_config` | Bootstrap config on how to loaded data on start-up. This is useful for loading large states on startup without (or before) hitting the network. | N | Unleash::Bootstrap::Configuration | `nil` |
 
-For in a more in depth look, please see `lib/unleash/configuration.rb`.
+For a more in-depth look, please see `lib/unleash/configuration.rb`.
 
+Environment Variable | Description
+---------|---------
+`UNLEASH_BOOTSTRAP_FILE` | File to read bootstrap data from
+`UNLEASH_BOOTSTRAP_URL` | URL to read bootstrap data from
 
 ## Usage in a plain Ruby Application
 
@@ -88,7 +95,7 @@ For in a more in depth look, please see `lib/unleash/configuration.rb`.
 require 'unleash'
 require 'unleash/context'
 
-@unleash = Unleash::Client.new(app_name: 'my_ruby_app', url: 'http://unleash.herokuapp.com/api', custom_http_headers: {'Authorization': '<API token>'})
+@unleash = Unleash::Client.new(app_name: 'my_ruby_app', url: 'http://unleash.herokuapp.com/api', custom_http_headers: { 'Authorization': '<API token>' })
 
 feature_name = "AwesomeFeature"
 unleash_context = Unleash::Context.new
@@ -266,6 +273,62 @@ variant = UNLEASH.get_variant "ColorVariants", @unleash_context, fallback_varian
 puts "variant color is: #{variant.payload.fetch('color')}"
 ```
 
+## Bootstrapping
+
+Bootstrap configuration allows the client to be initialized with a predefined set of toggle states. Bootstrapping can be configured by providing a bootstrap configuration when initializing the client.
+```ruby
+@unleash = Unleash::Client.new(
+    url: 'http://unleash.herokuapp.com/api',
+    app_name: 'my_ruby_app',
+    custom_http_headers: { 'Authorization': '<API token>' },
+    bootstrap_config: Unleash::Bootstrap::Configuration.new({
+        url: "http://unleash.herokuapp.com/api/client/features",
+        url_headers: {'Authorization': '<API token>'}
+    })
+)
+```
+The `Bootstrap::Configuration` initializer takes a hash with one of the following options specified:
+
+* `file_path` - An absolute or relative path to a file containing a JSON string of the response body from the Unleash server. This can also be set though the `UNLEASH_BOOTSTRAP_FILE` environment variable.
+* `url` - A url pointing to an Unleash server's features endpoint, the code sample above is illustrative. This can also be set though the `UNLEASH_BOOTSTRAP_URL` environment variable.
+* `url_headers` - Headers for the GET http request to the `url` above. Only used if the `url` parameter is also set. If this option isn't set then the bootstrapper will use the same url headers as the Unleash client.
+* `data` - A raw JSON string as returned by the Unleash server.
+* `block` - A lambda containing custom logic if you need it, an example is provided below.
+
+You should only specify one type of bootstrapping since only one will be invoked and the others will be ignored. The order of preference is as follows:
+
+- Select a data bootstrapper if it exists.
+- If no data bootstrapper exists, select the block bootstrapper.
+- If no block bootstrapper exists, select the file bootstrapper from either parameters or the specified environment variable.
+- If no file bootstrapper exists, then check for a URL bootstrapper from either the parameters or the specified environment variable.
+
+
+Example usage:
+
+First saving the toggles locally:
+```shell
+curl -H 'Authorization: <API token>' -XGET 'http://unleash.herokuapp.com/api' > ./default-toggles.json
+```
+
+Now using them on start up:
+
+```ruby
+
+custom_boostrapper = lambda {
+  File.read('./default-toggles.json')
+}
+
+@unleash = Unleash::Client.new(
+    app_name: 'my_ruby_app',
+    url: 'http://unleash.herokuapp.com/api',
+    custom_http_headers: { 'Authorization': '<API token>' },
+    bootstrap_config: Unleash::Bootstrap::Configuration.new({
+        block: custom_boostrapper
+    }
+)
+```
+
+This example could be easily achieved with a file bootstrapper, this is just to illustrate the usage of custom bootstrapping. Be aware that the client initializer will block until bootstrapping is complete.
 
 #### Client methods
 
@@ -296,13 +359,13 @@ This client comes with the all the required strategies out of the box:
 
  * ApplicationHostnameStrategy
  * DefaultStrategy
+ * FlexibleRolloutStrategy
  * GradualRolloutRandomStrategy
  * GradualRolloutSessionIdStrategy
  * GradualRolloutUserIdStrategy
  * RemoteAddressStrategy
  * UnknownStrategy
  * UserWithIdStrategy
-
 
 ## Development
 

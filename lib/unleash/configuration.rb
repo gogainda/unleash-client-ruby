@@ -1,5 +1,6 @@
 require 'securerandom'
 require 'tmpdir'
+require 'unleash/bootstrap/configuration'
 
 module Unleash
   class Configuration
@@ -18,7 +19,8 @@ module Unleash
       :metrics_interval,
       :backup_file,
       :logger,
-      :log_level
+      :log_level,
+      :bootstrap_config
 
     def initialize(opts = {})
       ensure_valid_opts(opts)
@@ -70,6 +72,10 @@ module Unleash
       self.url.delete_suffix '/'
     end
 
+    def use_bootstrap?
+      self.bootstrap_config&.valid?
+    end
+
     private
 
     def ensure_valid_opts(opts)
@@ -87,11 +93,12 @@ module Unleash
       self.disable_client   = false
       self.disable_metrics  = false
       self.refresh_interval = 10
-      self.metrics_interval = 30
+      self.metrics_interval = 60
       self.timeout          = 30
-      self.retry_limit      = 1
+      self.retry_limit      = 5
       self.backup_file      = nil
       self.log_level        = Logger::WARN
+      self.bootstrap_config = nil
 
       self.custom_http_headers = {}
     end

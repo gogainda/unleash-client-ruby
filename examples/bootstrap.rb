@@ -2,33 +2,24 @@
 
 require 'unleash'
 require 'unleash/context'
+require 'unleash/bootstrap/configuration'
 
-puts ">> START simple.rb"
-
-# Unleash.configure do |config|
-#   config.url = 'http://unleash.herokuapp.com/api'
-#   config.custom_http_headers = { 'Authorization': '943ca9171e2c884c545c5d82417a655fb77cec970cc3b78a8ff87f4406b495d0' }
-#   config.app_name = 'simple-test'
-#   config.refresh_interval = 2
-#   config.metrics_interval = 2
-#   config.retry_limit = 2
-# end
-# @unleash = Unleash::Client.new
-
-# or:
+puts ">> START bootstrap.rb"
 
 @unleash = Unleash::Client.new(
   url: 'http://unleash.herokuapp.com/api',
   custom_http_headers: { 'Authorization': '943ca9171e2c884c545c5d82417a655fb77cec970cc3b78a8ff87f4406b495d0' },
-  app_name: 'simple-test',
+  app_name: 'bootstrap-test',
   instance_id: 'local-test-cli',
   refresh_interval: 2,
+  disable_client: true,
+  disable_metrics: true,
   metrics_interval: 2,
-  retry_limit: 2
+  retry_limit: 2,
+  bootstrap_config: Unleash::Bootstrap::Configuration.new(file_path: "examples/default-toggles.json")
 )
 
-# feature_name = "AwesomeFeature"
-feature_name = "4343443"
+feature_name = "featureX"
 unleash_context = Unleash::Context.new
 unleash_context.user_id = 123
 
@@ -57,4 +48,4 @@ puts "> shutting down client..."
 
 @unleash.shutdown
 
-puts ">> END simple.rb"
+puts ">> END bootstrap.rb"
